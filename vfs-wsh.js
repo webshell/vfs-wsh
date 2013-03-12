@@ -15,14 +15,14 @@ var wsh = require('wsh');
 module.exports = function setup(fsOptions) {
     var csid = fsOptions.csid;
 
-    if (!csid) throw new Error("csid is a required option");
+    //if (!csid) throw new Error("csid is a required option");
 
     // Check and configure options
     var root = fsOptions.root;
     if (!root) throw new Error("root is a required option");
     var root = pathNormalize(root);
-    if (pathSep == "/" && root[0] !== "/") throw new Error("root path must start in /");
-    if (root[root.length - 1] !== pathSep) root += pathSep;
+    if (root[0] !== "/") throw new Error("root path must start in /");
+    if (root[root.length - 1] !== "/") root += "/";
     var base = root.substr(0, root.length - 1);
 
     if (fsOptions.hasOwnProperty('defaultEnv')) {
@@ -158,14 +158,15 @@ module.exports = function setup(fsOptions) {
 */
 
     function async_wshcall(opts, callback) {
-        opts.csid = this.csid;
+        opts.csid = csid;
+        opts.key = '588e55c74924e516b6cd618a180a0ebb';
         wsh.on('error', function(err) {
-            wsh.removeAllListener();
+            wsh.removeAllListeners();
             console.log('WSH error:', err);
             callback(err);
         });
         wsh.on('success', function(res) {
-            wsh.removeAllListener();
+            wsh.removeAllListeners();
             callback(null, res);
             console.log('WSH succeeded, result:', res);
         });
@@ -176,7 +177,7 @@ module.exports = function setup(fsOptions) {
     function remove(path, callback) {
         resolvePath(path, function (err, path) {
             if (err) return callback(err);
-            async_wshcall({code:'...'}, function (err) {
+            async_wshcall({code:'1'}, function (err) {
                 if (err) return callback(err);
                 return callback(null, {});
             });
@@ -193,18 +194,19 @@ module.exports = function setup(fsOptions) {
     }
 
     function stat(path, options, callback) {
-
         // Make sure the parent directory is accessable
         resolvePath(dirname(path), function (err, dir) {
             if (err) return callback(err);
             var file = basename(path);
             path = join(dir, file);
+            callback("not implemented: stat",file,path);
+            /*
             createStatEntry(file, path, function (entry) {
                 if (entry.err) {
                     return callback(entry.err);
                 }
                 callback(null, entry);
-            });
+            });*/
         });
     }
 
@@ -212,6 +214,18 @@ module.exports = function setup(fsOptions) {
 
         var meta = {};
 
+        async_wshcall({code: "cat(args.path,{view:null})", args:{path:path}}, function (err, res) {
+            if (err) return callback(err);
+            if (typeof res != "string") return callback('bad response in readfile');
+            meta.mime = getMime(path);
+            meta.etag = "123456789";
+            meta.stream = new Stream.Readable();
+            meta.size = res.length;
+            meta.stream.push(res);
+
+            callback(null, meta);
+        })
+/*
         open(path, "r", umask & 0666, function (err, path, fd, stat) {
             if (err) return callback(err);
             if (stat.isDirectory()) {
@@ -278,7 +292,7 @@ module.exports = function setup(fsOptions) {
                 return callback(err);
             }
             callback(null, meta);
-        });
+        });*/
     }
 
     function readdir(path, options, callback) {
