@@ -16,7 +16,8 @@
     "url": "git@github.com:webshell/vfs-wsh.git"
   },
   "dependencies": {
-    "wsh": "~0.1.1"
+    "wsh": "git://github.com/webshell/webshell-node-sdk.git",
+    "bufferstream": "~0.5.1"
   },
   "bugs": "https://github.com/webshell/vfs-wsh/issues",
   "engines": [

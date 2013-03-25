@@ -11,6 +11,7 @@ var getMime = require('simple-mime')("application/octet-stream");
 var vm = require('vm');
 
 var wsh = require('wsh');
+var BufferStream = require('bufferstream');
 
 module.exports = function setup(fsOptions) {
     var csid = fsOptions.csid;
@@ -71,6 +72,14 @@ module.exports = function setup(fsOptions) {
     };
 
 ////////////////////////////////////////////////////////////////////////////////
+
+    function notImplemented(msg, cb) {
+        console.log ((new Error()).stack);
+        if (cb)
+            cb("not implemented: " + msg);
+        else
+            throw new Error("not implemented: " + msg);
+    }
 
     // Realpath a file and check for access
     // callback(err, path)
@@ -157,27 +166,57 @@ module.exports = function setup(fsOptions) {
     }
 */
 
+    function createStatEntry(file, fullpath, callback) {
+        async_wshcall({code: "return stat(args.path)", args:{path:fullpath}}, function (err, stat) {
+            var entry = {
+                name: file
+            };
+
+            if (err || ! stat) {
+                entry.err = err || "Error";
+                return callback(entry);
+            } else {
+                entry.size = stat.size;
+                entry.mtime = stat.mtime
+
+                if (stat.mode & 0040000) // isdirectory
+                    entry.mime = "inode/directory";
+                else
+                    entry.mime = getMime(fullpath);
+                console.log ('STAT ->>>>>>', entry);
+                return callback(entry);
+            }
+        });
+    }
+
     function async_wshcall(opts, callback) {
-        opts.csid = csid;
-        opts.key = '588e55c74924e516b6cd618a180a0ebb';
-        wsh.on('error', function(err) {
-            wsh.removeAllListeners();
+        opts.csid = "ni5MCBLlPAdyiORsewoUPJ9T";//csid;
+        opts.domain = "webshell.local";
+        opts.key = 'e049b4bae050f541df22899019fd2794';
+        opts.closure = true;
+        //opts.secret = 
+        var wshcall = wsh.exec(opts);
+        console.log('--- WSHCALL ', wshcall._callid, '---');
+        console.log('WSH-EXEC', opts);
+        wshcall.once('error', function(err) {
+            console.log('--- WSHCALL ', wshcall._callid, '---');
+            wshcall.removeAllListeners();
             console.log('WSH error:', err);
             callback(err);
         });
-        wsh.on('success', function(res) {
-            wsh.removeAllListeners();
+        wshcall.once('success', function(res) {
+            console.log('--- WSHCALL ', wshcall._callid, '---');
+            wshcall.removeAllListeners();
+            console.log('WSH succeeded, result:', arguments);
             callback(null, res);
-            console.log('WSH succeeded, result:', res);
         });
-        wsh.exec(opts);
     }
 
     // Common logic used by rmdir and rmfile
     function remove(path, callback) {
         resolvePath(path, function (err, path) {
             if (err) return callback(err);
-            async_wshcall({code:'1'}, function (err) {
+            async_wshcall({code:'return rm(args.path)', args:{path:path}}, function (err) {
                 if (err) return callback(err);
                 return callback(null, {});
             });
@@ -199,14 +238,13 @@ module.exports = function setup(fsOptions) {
             if (err) return callback(err);
             var file = basename(path);
             path = join(dir, file);
-            callback("not implemented: stat",file,path);
-            /*
+
             createStatEntry(file, path, function (entry) {
                 if (entry.err) {
                     return callback(entry.err);
                 }
                 callback(null, entry);
-            });*/
+            });
         });
     }
 
@@ -214,14 +252,18 @@ module.exports = function setup(fsOptions) {
 
         var meta = {};
 
-        async_wshcall({code: "cat(args.path,{view:null})", args:{path:path}}, function (err, res) {
+        async_wshcall({code: "return cat(args.path,{view:null})", args:{path:path}}, function (err, res) {
             if (err) return callback(err);
             if (typeof res != "string") return callback('bad response in readfile');
             meta.mime = getMime(path);
             meta.etag = "123456789";
-            meta.stream = new Stream.Readable();
+            meta.stream = new Stream();
+            meta.stream.readable = true;
+            setTimeout(function() {
+                meta.stream.emit('data', res);
+                meta.stream.emit('end');
+            }, 1000);
             meta.size = res.length;
-            meta.stream.push(res);
 
             callback(null, meta);
         })
@@ -301,59 +343,56 @@ module.exports = function setup(fsOptions) {
 
         resolvePath(path, function (err, path) {
             if (err) return callback(err);
-            fs.stat(path, function (err, stat) {
+
+            meta.etag = Math.random() * 9999999;
+            if (options.head)
+                return callback(null, meta);
+
+            async_wshcall({code: "return ls(args.path,{view:null})", args:{path:path}}, function (err, res) {
                 if (err) return callback(err);
-                if (!stat.isDirectory()) {
-                    err = new Error("ENOTDIR: Requested resource is not a directory");
-                    err.code = "ENOTDIR";
-                    return callback(err);
+
+                console.log ('LS', res);
+                var files = [];
+                for (var i in res.files)
+                    files.push({name: res.files[i].name, size:0, mtime:0, mime:getMime(res.files[i].name)});
+                for (var i in res.directories)
+                    files.push({name: res.directories[i].name, size:0, mtime:0, mime:'inode/directory'});
+
+                var stream = new Stream();
+                stream.readable = true;
+                var paused;
+                stream.pause = function () {
+                    if (paused === true) return;
+                    paused = true;
+                };
+                stream.resume = function () {
+                    if (paused === false) return;
+                    paused = false;
+                //    getNext();
                 }
+                meta.stream = stream;
+                callback(null, meta);
+                for (var i in files)
+                    stream.emit("data",files[i]);
+                stream.emit("end");
+                /*
+                var index = 0;
+                stream.resume();
+                function getNext() {
+                    if (index === files.length) return done();
+                    var file = files[index++];
+                    var fullpath = join(path, file);
 
-                // ETag support
-                meta.etag = calcEtag(stat);
-                if (options.etag === meta.etag) {
-                    meta.notModified = true;
-                    return callback(null, meta);
+                    createStatEntry(file, fullpath, function onStatEntry(entry) {
+                        stream.emit("data", entry);
+
+                        if (!paused)
+                            getNext();
+                    });
                 }
-
-                fs.readdir(path, function (err, files) {
-                    if (err) return callback(err);
-                    if (options.head) {
-                        return callback(null, meta);
-                    }
-                    var stream = new Stream();
-                    stream.readable = true;
-                    var paused;
-                    stream.pause = function () {
-                        if (paused === true) return;
-                        paused = true;
-                    };
-                    stream.resume = function () {
-                        if (paused === false) return;
-                        paused = false;
-                        getNext();
-                    };
-                    meta.stream = stream;
-                    callback(null, meta);
-                    var index = 0;
-                    stream.resume();
-                    function getNext() {
-                        if (index === files.length) return done();
-                        var file = files[index++];
-                        var fullpath = join(path, file);
-
-                        createStatEntry(file, fullpath, function onStatEntry(entry) {
-                            stream.emit("data", entry);
-
-                            if (!paused) {
-                                getNext();
-                            }
-                        });
-                    }
-                    function done() {
-                        stream.emit("end");
-                    }
-                });
+                function done() {
+                    stream.emit("end");
+                }*/
             });
         });
     }
@@ -420,8 +459,8 @@ module.exports = function setup(fsOptions) {
         });
 
         function onPath(path) {
-            if (!options.mode) options.mode = umask & 0666;
-            var writable = new fs.WriteStream(path, options);
+            var writable = new BufferStream({encoding:'utf8', size:'flexible'});
+
             if (readable) {
                 readable.pipe(writable);
             }
@@ -436,7 +475,10 @@ module.exports = function setup(fsOptions) {
             });
             writable.on('close', function () {
                 if (hadError) return;
-                callback(null, meta);
+                async_wshcall({code: "return write({path:args.path,data:args.data},{view:null})", args:{path:path, data:writable.toString()}}, function (err, res) {
+                    if (err) return error(err);
+                    callback(null, meta);
+                });
             });
 
             if (readable) {
@@ -458,7 +500,7 @@ module.exports = function setup(fsOptions) {
         resolvePath(dirname(path), function (err, dir) {
             if (err) return callback(err);
             path = join(dir, basename(path));
-            fs.mkdir(path, function (err) {
+            async_wshcall({code: "return mkdir(args.path,{view:null})", args:{path:path}}, function(err, res) {
                 if (err) return callback(err);
                 callback(null, meta);
             });
@@ -493,7 +535,7 @@ module.exports = function setup(fsOptions) {
                 if (err) return callback(err);
                 to = join(dir, basename(to));
                 // Rename the file
-                fs.rename(from, to, function (err) {
+                async_wshcall({code: "return mv({src:args.src,dst:args.dst},{view:null})", args:{src:from,dst:to}}, function (err, res) {
                     if (err) return callback(err);
                     callback(null, meta);
                 });
@@ -519,6 +561,7 @@ module.exports = function setup(fsOptions) {
     }
 
     function symlink(path, options, callback) {
+        return notImplemented('symlink', callback);
         if (!options.target) return callback(new Error("options.target is required"));
         var meta = {};
         // Get real path to target dir
@@ -533,6 +576,7 @@ module.exports = function setup(fsOptions) {
     }
 
     function watch(path, options, callback) {
+        return notImplemented('watch', callback);
         var meta = {};
         resolvePath(path, function (err, path) {
             if (err) return callback(err);
@@ -554,6 +598,7 @@ module.exports = function setup(fsOptions) {
     }
 
     function connect(port, options, callback) {
+        return notImplemented('connect', callback);
         var retries = options.hasOwnProperty('retries') ? options.retries : 5;
         var retryDelay = options.hasOwnProperty('retryDelay') ? options.retryDelay : 50;
         tryConnect();
@@ -577,6 +622,11 @@ module.exports = function setup(fsOptions) {
     }
 
     function spawn(executablePath, options, callback) {
+        console.log("SPAWN",arguments);
+        options.code = executablePath;
+        async_wshcall(options, callback);
+        return;
+        /*return callback(new Error('not implemented yet'));
         var args = options.args || [];
 
         if (options.hasOwnProperty('env')) {
@@ -601,11 +651,12 @@ module.exports = function setup(fsOptions) {
 
         callback(null, {
             process: child
-        });
+        });*/
     }
 
     function execFile(executablePath, options, callback) {
-
+        console.log("---- EXEC FILE", executablePath, options);
+        return notImplemented('execFile', callback);
         if (options.hasOwnProperty('env')) {
             options.env.__proto__ = fsOptions.defaultEnv;
         } else {
@@ -654,7 +705,7 @@ module.exports = function setup(fsOptions) {
     }
 
     function extend(name, options, callback) {
-
+        return notImplemented('extend', callback);
         var meta = {};
         // Pull from cache if it's already loaded.
         if (!options.redefine && apis.hasOwnProperty(name)) {
@@ -711,11 +762,13 @@ module.exports = function setup(fsOptions) {
     }
 
     function unextend(name, options, callback) {
+        return notImplemented('unextend', callback);
         delete apis[name];
         callback(null, {});
     }
 
     function use(name, options, callback) {
+        return notImplemented('use', callback);
         var api = apis[name];
         if (!api) {
             var err = new Error("ENOENT: There is no API extension named " + name);
@@ -757,6 +810,7 @@ function consumeStream(stream, callback) {
 
 // node-style eval
 function evaluate(code) {
+    return notImplemented('evaluate', callback);
     var exports = {};
     var module = { exports: exports };
     vm.runInNewContext(code, {
