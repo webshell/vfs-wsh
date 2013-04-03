@@ -25,12 +25,12 @@ module.exports = function setup(fsOptions) {
     if (root[0] !== "/") throw new Error("root path must start in /");
     if (root[root.length - 1] !== "/") root += "/";
     var base = root.substr(0, root.length - 1);
-
+/*
     if (fsOptions.hasOwnProperty('defaultEnv')) {
         fsOptions.defaultEnv.__proto__ = process.env;
     } else {
         fsOptions.defaultEnv = process.env;
-    }
+    }*/
 
     // Storage for event handlers
     var handlers = {};
@@ -68,7 +68,10 @@ module.exports = function setup(fsOptions) {
         // Extending the API
         extend: extend,
         unextend: unextend,
-        use: use
+        use: use,
+
+        options: fsOptions,
+        setup: module.exports
     };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -183,31 +186,32 @@ module.exports = function setup(fsOptions) {
                     entry.mime = "inode/directory";
                 else
                     entry.mime = getMime(fullpath);
-                console.log ('STAT ->>>>>>', entry);
+                //console.log ('STAT ->>>>>>', entry);
                 return callback(entry);
             }
         });
     }
 
     function async_wshcall(opts, callback) {
-        opts.csid = "ni5MCBLlPAdyiORsewoUPJ9T";//csid;
+        opts.csid = csid;
         opts.domain = "webshell.local";
         opts.key = 'e049b4bae050f541df22899019fd2794';
         opts.closure = true;
         //opts.secret = 
         var wshcall = wsh.exec(opts);
-        console.log('--- WSHCALL ', wshcall._callid, '---');
-        console.log('WSH-EXEC', opts);
+        if (opts.csid)
+            console.log('--- WSHCALL EXEC', wshcall._callid, '->', opts.code);
+        else
+            console.log('--- WSHCALL MISSCSID', wshcall._callid, '->', opts.code, '|', opts.args, (new Error()).stack);
         wshcall.once('error', function(err) {
-            console.log('--- WSHCALL ', wshcall._callid, '---');
+            console.log('--- WSHCALL ERROR', wshcall._callid, err, '->', opts.code, '|', opts.args);
             wshcall.removeAllListeners();
-            console.log('WSH error:', err);
             callback(err);
         });
         wshcall.once('success', function(res) {
-            console.log('--- WSHCALL ', wshcall._callid, '---');
+            //console.log('--- WSHCALL ', wshcall._callid, '---');
             wshcall.removeAllListeners();
-            console.log('WSH succeeded, result:', arguments);
+            //console.log('WSH succeeded, result:', arguments);
             callback(null, res);
         });
     }
@@ -234,6 +238,7 @@ module.exports = function setup(fsOptions) {
 
     function stat(path, options, callback) {
         // Make sure the parent directory is accessable
+        //console.log('STAT',(new Error()).stack)
         resolvePath(dirname(path), function (err, dir) {
             if (err) return callback(err);
             var file = basename(path);
@@ -252,21 +257,24 @@ module.exports = function setup(fsOptions) {
 
         var meta = {};
 
-        async_wshcall({code: "return cat(args.path,{view:null})", args:{path:path}}, function (err, res) {
+        resolvePath(path, function (err, path) {
             if (err) return callback(err);
-            if (typeof res != "string") return callback('bad response in readfile');
-            meta.mime = getMime(path);
-            meta.etag = "123456789";
-            meta.stream = new Stream();
-            meta.stream.readable = true;
-            setTimeout(function() {
-                meta.stream.emit('data', res);
-                meta.stream.emit('end');
-            }, 1000);
-            meta.size = res.length;
+            async_wshcall({code: "return cat(args.path,{view:null})", args:{path:path}}, function (err, res) {
+                if (err) return callback(err);
+                if (typeof res != "string") return callback('bad response in readfile');
+                meta.mime = getMime(path);
+                meta.etag = "123456789";
+                meta.stream = new Stream();
+                meta.stream.readable = true;
+                setTimeout(function() {
+                    meta.stream.emit('data', res);
+                    meta.stream.emit('end');
+                }, 1000);
+                meta.size = res.length;
 
-            callback(null, meta);
-        })
+                callback(null, meta);
+            });
+        });
 /*
         open(path, "r", umask & 0666, function (err, path, fd, stat) {
             if (err) return callback(err);
@@ -351,7 +359,7 @@ module.exports = function setup(fsOptions) {
             async_wshcall({code: "return ls(args.path,{view:null})", args:{path:path}}, function (err, res) {
                 if (err) return callback(err);
 
-                console.log ('LS', res);
+                //console.log ('LS', res);
                 var files = [];
                 for (var i in res.files)
                     files.push({name: res.files[i].name, size:0, mtime:0, mime:getMime(res.files[i].name)});
@@ -461,15 +469,9 @@ module.exports = function setup(fsOptions) {
         function onPath(path) {
             var writable = new BufferStream({encoding:'utf8', size:'flexible'});
 
-            if (readable) {
-                readable.pipe(writable);
-            }
-            else {
-                meta.stream = writable;
-                callback(null, meta);
-            }
             var hadError;
             writable.once('error', function (err) {
+                console.log("ERROR", err);
                 hadError = true;
                 error(err);
             });
@@ -482,14 +484,21 @@ module.exports = function setup(fsOptions) {
             });
 
             if (readable) {
+                readable.pipe(writable);
+
                 // Stop buffering events and playback anything that happened.
                 readable.removeListener("data", onData);
                 readable.removeListener("end", onEnd);
+
                 buffer.forEach(function (event) {
                     readable.emit.apply(readable, event);
                 });
                 // Resume the input stream if possible
                 if (readable.resume) readable.resume();
+            }
+            else {
+                meta.stream = writable;
+                callback(null, meta);
             }
         }
     }
