@@ -170,7 +170,7 @@ module.exports = function setup(fsOptions) {
 */
 
     function createStatEntry(file, fullpath, callback) {
-        async_wshcall({code: "return stat(args.path)", args:{path:fullpath}}, function (err, stat) {
+        async_wshcall({code: "return stat(args.path)", args:{path:fullpath}, ignorerr:true}, function (err, stat) {
             var entry = {
                 name: file
             };
@@ -204,7 +204,7 @@ module.exports = function setup(fsOptions) {
         else
             console.log('--- WSHCALL MISSCSID', wshcall._callid, '->', opts.code, '|', opts.args, (new Error()).stack);
         wshcall.once('error', function(err) {
-            console.log('--- WSHCALL ERROR', wshcall._callid, err, '->', opts.code, '|', opts.args);
+            if (!opts.ignorerr) console.log('--- WSHCALL ERROR', wshcall._callid, err, '->', opts.code, '|', opts.args);
             wshcall.removeAllListeners();
             callback(err);
         });
