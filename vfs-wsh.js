@@ -411,7 +411,7 @@ module.exports = function setup(fsOptions) {
         var callback = function (err, meta) {
             if (called) {
                 if (err) {
-                    if (meta.stream) meta.stream.emit("error", err);
+                    if (meta && meta.stream) meta.stream.emit("error", err);
                     else console.error(err.stack);
                 }
                 else if (meta.stream) meta.stream.emit("saved");
@@ -446,7 +446,7 @@ module.exports = function setup(fsOptions) {
                 readable.removeListener("end", onEnd);
                 if (readable.destroy) readable.destroy();
             }
-            if (err) callback(err);
+            if (err) callback(err, meta);
         }
 
         // Make sure the user has access to the directory and get the real path.
